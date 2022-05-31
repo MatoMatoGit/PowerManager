@@ -11,7 +11,7 @@
 
 #include <stdint.h>
 
-#define OC_TIMER_NUM_CALLBACKS 2
+#define OC_TIMER_NUM_CALLBACKS 1
 
 typedef void (*OcTimerCb_t) (void);
 

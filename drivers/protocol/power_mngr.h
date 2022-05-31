@@ -11,13 +11,14 @@
 
 #include <stdint.h>
 
-#define MAX_CMDS 2
+#define MAX_CMDS 3
 #define CMD_INDEX 0
 #define ARG_START_INDEX 1
 
 typedef enum {
 	CMD_SLEEP = 0,
 	CMD_STATUS,
+	CMD_VERSION,
 	CMD_NUM,
 	CMD_INVALID,
 }PowerMngrCmd_e;

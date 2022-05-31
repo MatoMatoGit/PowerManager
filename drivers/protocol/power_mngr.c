@@ -10,6 +10,7 @@
 
 #define CMD_CODE_SLEEP 97
 #define CMD_CODE_STATUS 100
+#define CMD_CODE_VERSION 101
 
 typedef struct Cmd_t * pCmd_t;
 
@@ -23,6 +24,7 @@ typedef struct Cmd_t {
 
 static void ProcessCmdSleep(PowerMngrCmd_e cmd_enum, pCmd_t cmd, uint8_t *buffer);
 static void ProcessCmdStatus(PowerMngrCmd_e cmd_enum, pCmd_t cmd, uint8_t *buffer);
+static void ProcessCmdVersion(PowerMngrCmd_e cmd_enum, pCmd_t cmd, uint8_t *buffer);
 static PowerMngrCmd_e CmdFromCode(uint8_t code);
 
 const Cmd_t SleepCmd = {
@@ -36,6 +38,14 @@ const Cmd_t StatusCmd = {
 	.length = 1,
 	.func = ProcessCmdStatus
 };
+
+const Cmd_t VersionCmd = {
+	.cmd = CMD_CODE_VERSION,
+	.length = 1,
+	.func = ProcessCmdVersion
+};
+
+
 
 
 static uint8_t RxBuffer[MAX_CMD_LENGTH];
@@ -113,7 +123,15 @@ static void ProcessCmdStatus(PowerMngrCmd_e cmd_enum, pCmd_t cmd, uint8_t *buffe
 {
 	uint8_t status = 0;
 	CmdCallbacks[cmd_enum](cmd_enum, (void *)&status);
-	softSerialPrint((const char *)&status);
+	softSerialPrintInt(status);
+}
+
+static void ProcessCmdVersion(PowerMngrCmd_e cmd_enum, pCmd_t cmd, uint8_t *buffer)
+{
+	uint8_t version[2] = {0};
+	CmdCallbacks[cmd_enum](cmd_enum, (void *)&version);
+	softSerialPrintInt(version[0]);
+	softSerialPrintInt(version[1]);
 }
 
 static PowerMngrCmd_e CmdFromCode(uint8_t code)

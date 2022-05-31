@@ -180,7 +180,6 @@ static void ISenseControlInit(ExtIntType_t type)
 ISR(PCINT0_vect)
 {
     volatile uint8_t state = 0;
-	PORTB ^= (1 << PINB3);
     if(ActiveInt != NULL) {
         //state = *(ActiveInt->port) & (1 << ActiveInt->pin);
         ActiveInt->cb(state);

@@ -13,7 +13,7 @@
 
 #include <string.h>
 
-#define SOFT_TIMER_UPDATE_INTERVAL_MS 250
+#define SOFT_TIMER_UPDATE_INTERVAL_MS 25
 
 struct SoftTimerInstance {
 	volatile bool en;
@@ -26,13 +26,13 @@ static void OcTimerCallback(void);
 
 static struct SoftTimerInstance SoftTimers[SOFT_TIMER_CONFIG_NUM_TIMERS];
 
-static uint32_t TotalTime = 0;
+static volatile uint32_t TotalTime = 0;
 
 void SoftTimerInit(void)
 {
 	memset(SoftTimers, 0, sizeof(SoftTimers));
 	
-	OcTimerInit(244);
+	OcTimerInit(195);
 	OcTimerCallbackRegister(OcTimerCallback);
 	OcTimerStart();
 }

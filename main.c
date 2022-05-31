@@ -6,46 +6,55 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <math.h>
 
-#include "SoftwareSerial.h"
-#include "oc_timer.h"
 #include "wdt.h"
 #include "sleep.h"
-#include "soft_timer.h"
 #include "ext_int.h"
 #include "fw_info.h"
 
-#include "power_mngr.h"
-
 #define ENABLE_SERIAL_OUTPUT 1
 
-#define AWAKE_TIME_MAX_MSEC		600000	/* 10 Mins. */
+#define AWAKE_TIME_MAX_MSEC		10000//600000	/* 10 Mins. */
 #define SLEEP_TIME_MIN_SEC		300	/* 5 Mins. */
 
 #define SOFTSERIAL_TX_DDR	DDRB
 #define SOFTSERIAL_TX_PORT	PORTB
-#define SOFTSERIAL_TX_PIN	PINB2
+#define SOFTSERIAL_TX_PIN	PINB4
 #define SOFTSERIAL_RX_PIN	PINB1
+
+#define SELECT_PIN	PINB1
+#define PULSE_PIN	PINB2
+#define LDO_EN_PIN	PINB3
+
 
 /* avrdude.exe -p t85 -B 25 -c usbasp -U flash:w:"C:\Users\dorspi\Documents\Atmel Studio\7.0\mvsensor_fw\Debug\mvsensor_fw.hex":i */
 /* avrdude.exe -p t85 -B 25 -c usbasp -U hfuse:w:0xDF:m */
 /* avrdude.exe -p t85 -B 25 -c usbasp -U lfuse:w:0xE2:m */
 
+typedef enum {
+	AWAIT_SELECT_EXP = 0,
+	AWAIT_DESLECT_EXP = 1,
+	AWAIT_SELECT_FACT = 2,
+	AWAIT_DESELECT_FACT = 3,
+	SLEEP = 4,
+	WAKE = 5,
+}State_e;
+
 static volatile bool wdt_wake = false;
-
-static ExtInt_t UartInt = NULL;
-static SoftTimer_t AwakeTimer;
-
-static volatile bool InitSleep = false;
-static volatile uint32_t SleepTime = 5;
-static uint8_t Status = 0x01;
 
 void WakeupCallback(void);
 static void SwitchToStandby(uint32_t sleep_time_s);
 static void SerialGpioInit(void);
-static void CommandSleep(PowerMngrCmd_e cmd, void *args);
-static void CommandStatus(PowerMngrCmd_e cmd, void *args);
-static void AwakeTimerCallback(SoftTimer_t timer);
+static bool SelectPinEnabled(void);
+static void GpioInit(void);
+static void GpioDeinit(void);
+static void LdoEnable(void);
+static void LdoDisable(void);
+static void PulseNTimes(uint8_t n);
+static bool PulsePinState(void);
+static uint8_t CountPulses(void);
+static void VariableDelayMsec(uint32_t msec);
 
 int main(void)
 {
@@ -54,73 +63,79 @@ int main(void)
 	MCUCR = 0;
 	MCUSR = 0;
 	PORTB = 0;
-	DDRB &= ~(1 << PINB0) & ~(1 << PINB1) & ~(1 << PINB2) & ~(1 << PINB3) & ~(1 << PINB4);
-	DDRB |= (1 << PINB3);
-	DDRB |= (1 << PINB4);
 	
 	static int log_res = 0;
 
-	softSerialInit(&DDRB, &PORTB, &PINB, SOFTSERIAL_RX_PIN, SOFTSERIAL_TX_PIN); //SOFTWARE_SERIAL_RX_DISABLED
-	softSerialBegin(2400);
-	SerialGpioInit();
+	// softSerialInit(&DDRB, &PORTB, &PINB, SOFTWARE_SERIAL_RX_DISABLED, SOFTSERIAL_TX_PIN);
+	// softSerialBegin(2400);
+	// DDRB |= (1 << SOFTSERIAL_TX_PIN);
 
-	SoftTimerInit();
-	AwakeTimer = SoftTimerCreate(AWAKE_TIME_MAX_MSEC, AwakeTimerCallback);
 
 	FwInfoInit();
 	
 #if ENABLE_SERIAL_OUTPUT==1
-	FwInfoPrint();
+	//FwInfoPrint();
 #endif
 
 	SleepWakeupCallbackSet(WakeupCallback);
-	
-	ExtIntInit();
-	UartInt = ExtIntRegister(SOFTSERIAL_RX_PIN, &PORTB, EXT_INT_PIN_CHANGE, softSerialRxHandler);
 
-	softSerialPrintLn("boot");
-	ExtIntEnable(UartInt);
-	PowerMngrRegisterCallback(CMD_SLEEP, CommandSleep);
-	PowerMngrRegisterCallback(CMD_STATUS, CommandStatus);
-	
-	SoftTimerStart(AwakeTimer);
-	
-	PORTB |= (1 << PINB4);
+	uint8_t exp = 1;
+	uint8_t fact = 1;
+	uint32_t sleep_time_sec = 0;
 	
     while (1)
     {	
-		int c = softSerialRead();
-		if(c >= 0) {
-			softSerialPrintInt(c);
-			softSerialPrintLn("");
-			if(c != '\n') {
-				PowerMngrRxHandler(c);
+		static State_e state = WAKE;
+		
+		switch(state) {
+			case AWAIT_SELECT_EXP:
+			exp = CountPulses();
+			if(exp > 0) {
+				state = AWAIT_SELECT_FACT;
 			}
+			break;
+
+			case AWAIT_SELECT_FACT:
+			fact = CountPulses();
+			if(fact >  0) {
+				state = SLEEP;
+			}
+			break;
+
+			case SLEEP:
+			sleep_time_sec = (int)(pow(10, (exp-1))) * fact;
+
+			LdoDisable();
+			
+			//PulseNTimes(exp);
+			//_delay_ms(1000);
+			//PulseNTimes(fact);
+			
+			//PORTB |= (1 << LDO_EN_PIN);
+			//VariableDelayMsec(sleep_time_sec);
+			//PORTB &= ~(1 << LDO_EN_PIN);
+			
+			GpioDeinit();
+			SwitchToStandby(sleep_time_sec);
+			state = WAKE;
+			break;
+
+			case WAKE:
+			sleep_time_sec = 0;
+			fact = 1;
+			exp = 1;
+			GpioInit();
+			
+			_delay_ms(1000);
+			LdoEnable();
+			
+			state = AWAIT_SELECT_EXP;
+			break;
+
+			default:
+			break;
 		}
-		_delay_ms(200);
-		
-		if(InitSleep == false) {
-			continue;
-		}
-		
-		SoftTimerStop(AwakeTimer);
-		SoftTimerDeinit();
-		
-		PORTB &= ~(1 << PINB4);
-		SwitchToStandby(SleepTime);
-		
-		InitSleep = false;
-		
-		SerialGpioInit();
-		ExtIntEnable(UartInt);
-				
-		DDRB |= (1 << PINB3);
-		
-		DDRB |= (1 << PINB4);
-		PORTB |= (1 << PINB4);
-		
-		SoftTimerInit();
-		SoftTimerStart(AwakeTimer);
+
     }
 }
 
@@ -135,40 +150,78 @@ void WakeupCallback(void)
 static void SwitchToStandby(uint32_t sleep_time_s)
 {
 #if ENABLE_SERIAL_OUTPUT==1
-	softSerialPrint("sleep: ");
-	softSerialPrintIntLn(sleep_time_s);
+	//softSerialPrint("sleep: ");
+	//softSerialPrintIntLn(sleep_time_s);
 #endif
-	
-	/* Disable all outputs and set all IOs as inputs. */
-	PORTB = 0;
-	DDRB &= ~(1 << PINB0) & ~(1 << PINB1) & ~(1 << PINB2) & ~(1 << PINB3) & ~(1 << PINB4);
-	
-	ExtIntDisable();
+
 	SleepForDuration(sleep_time_s);
 }
 
-static void SerialGpioInit(void)
+static uint8_t CountPulses(void)
 {
-	DDRB |= (1 << SOFTSERIAL_TX_PIN);
-	PORTB |= (1 << SOFTSERIAL_TX_PIN);
+	uint8_t pulses = 0;
 	
-	DDRB &= ~(1 << SOFTSERIAL_RX_PIN);
+	while(SelectPinEnabled() == true) {
+		//PORTB |= (1 << PINB4);
+		if(PulsePinState() == true) {
+			while(PulsePinState() == true);
+			//PORTB ^= (1 << PINB3);
+			pulses++;
+		}
+	}
+	//PORTB &= ~(1 << PINB4);	
+	
+	return pulses;
 }
 
-static void CommandSleep(PowerMngrCmd_e cmd, void *args)
+static bool PulsePinState(void)
 {
-	softSerialPrintLn("received sleep command");	
-	InitSleep = true;
-	SleepTime = *((uint32_t *)args);
+	return PINB & (1 << PULSE_PIN);
 }
 
-static void CommandStatus(PowerMngrCmd_e cmd, void *args)
+static bool SelectPinEnabled(void)
 {
-	*((uint8_t *)args) = Status;
+	return PINB & (1 <<  SELECT_PIN);
 }
 
-static void AwakeTimerCallback(SoftTimer_t timer)
+static void GpioInit(void)
 {
-	softSerialPrintLn("awake for max duration, forcing sleep");
-	InitSleep = true;
+	DDRB &= ~(1 << SELECT_PIN) & ~(1 << PULSE_PIN);
+	DDRB |= (1 << LDO_EN_PIN);
+	//DDRB |= (1 <<  PINB4);
+	//DDRB |= (1 << SOFTSERIAL_TX_PIN);
+	
+}
+
+static void GpioDeinit(void)
+{
+	PORTB = 0;
+	DDRB &= ~(1 << PINB0) & ~(1 << PINB1) & ~(1 << PINB2) & ~(1 << PINB3) & ~(1 << PINB4);
+}
+
+static void LdoEnable(void)
+{
+	PORTB |= (1 << LDO_EN_PIN);
+}
+
+static void LdoDisable(void)
+{
+	PORTB &= ~(1 << LDO_EN_PIN);
+}
+
+static void PulseNTimes(uint8_t n)
+{
+	for(uint8_t i = 0; i < n; i++) {
+		PORTB |= (1 << PINB4);
+		_delay_ms(100);
+		PORTB &= ~(1 << PINB4);
+		_delay_ms(100);
+	}
+}
+
+static void VariableDelayMsec(uint32_t msec)
+{
+	for(uint32_t i = 0; i < msec; i++) {
+		_delay_ms(1);
+	}
 }
